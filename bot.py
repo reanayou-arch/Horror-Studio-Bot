@@ -1,6 +1,6 @@
 # ================================
 # bot.py
-# Главный файл Telegram Horror-Studio Bot V1
+# Horror-Studio Bot V1.1 (AI + Render-ready)
 # ================================
 
 import asyncio
@@ -19,16 +19,23 @@ from db import (
     add_character,
     get_stories,
     get_story,
-    get_characters,
-    delete_story
+    get_characters
 )
 
-# Создаём бота и диспетчер
+from groq_ai import generate_story_reply
+
+
+# ================================
+# Создание бота
+# ================================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # Временное хранение персонажей при создании истории
 temp_characters = {}
+
+# Активная игра: какой игрок какую историю проходит
+active_story = {}
 
 
 # ================================
@@ -37,7 +44,6 @@ temp_characters = {}
 def main_menu(is_admin=False):
     kb = InlineKeyboardBuilder()
 
-    # Автор может создавать истории
     if is_admin:
         kb.button(text="➕ Создать историю", callback_data="create_story")
 
@@ -135,10 +141,7 @@ async def add_char(callback: CallbackQuery, state: FSMContext):
 async def char_name(message: Message, state: FSMContext):
     await state.update_data(char_name=message.text)
 
-    await message.answer(
-        "Введите роль персонажа:\n"
-        "Мама, папа, брат, сестра, подруга, лучший друг, монстр, злодей, сосед, незнакомец"
-    )
+    await message.answer("Введите роль персонажа:")
     await state.set_state(StoryCreation.char_role)
 
 
@@ -160,7 +163,6 @@ async def char_personality(message: Message, state: FSMContext):
     kb.adjust(2)
 
     await message.answer("Вы знакомы с ним?", reply_markup=kb.as_markup())
-    await state.set_state(StoryCreation.char_known)
 
 
 @dp.callback_query(F.data.startswith("known_"))
@@ -169,7 +171,6 @@ async def char_known(callback: CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
 
-    # Добавляем персонажа во временный список
     temp_characters[callback.from_user.id].append({
         "name": data["char_name"],
         "role": data["char_role"],
@@ -177,11 +178,8 @@ async def char_known(callback: CallbackQuery, state: FSMContext):
         "known": known_status
     })
 
-    await callback.message.answer(
-        f"✅ Персонаж добавлен! Сейчас их: {len(temp_characters[callback.from_user.id])}"
-    )
+    await callback.message.answer("✅ Персонаж добавлен!")
 
-    # Возвращаем кнопки
     kb = InlineKeyboardBuilder()
     kb.button(text="➕ Добавить персонажа", callback_data="add_character")
     kb.button(text="✅ Создать историю", callback_data="finish_story")
@@ -205,16 +203,11 @@ async def finish_story(callback: CallbackQuery, state: FSMContext):
         data["start_scene"]
     )
 
-    # Сохраняем персонажей в SQLite
     for c in temp_characters.get(callback.from_user.id, []):
         add_character(story_id, c["name"], c["role"], c["personality"], c["known"])
 
     await callback.message.answer("История создана! ✔️")
-
-    await callback.message.answer(
-        "Главное меню:",
-        reply_markup=main_menu(True)
-    )
+    await callback.message.answer("Главное меню:", reply_markup=main_menu(True))
 
     await state.clear()
 
@@ -262,22 +255,39 @@ async def start_story(callback: CallbackQuery):
     story_id = int(callback.data.split("_")[1])
 
     story = get_story(story_id)
-    chars = get_characters(story_id)
+
+    # Сохраняем активную историю игрока
+    active_story[callback.from_user.id] = story_id
 
     title, desc, past, start_scene = story
 
-    # Вступительная сцена
     await callback.message.answer(
         f"📖 История: {title}\n\n"
         f"{start_scene}\n\n"
         "✍️ Напишите первое сообщение..."
     )
 
-    # Пока AI не подключён → заглушка
-    await callback.message.answer(
-        "⚠️ AI пока не подключён (Groq API ключа нет).\n"
-        "Позже здесь будет настоящая переписка."
-    )
+
+# ================================
+# Игровая переписка (AI отвечает)
+# ================================
+@dp.message()
+async def game_chat(message: Message):
+    user_id = message.from_user.id
+
+    # Если игрок не начал историю — игнорируем
+    if user_id not in active_story:
+        return
+
+    story_id = active_story[user_id]
+
+    story_data = get_story(story_id)
+    characters = get_characters(story_id)
+
+    # Генерация ответа AI
+    reply = generate_story_reply(story_data, characters, message.text)
+
+    await message.answer(reply)
 
 
 # ================================
@@ -285,7 +295,7 @@ async def start_story(callback: CallbackQuery):
 # ================================
 async def main():
     init_db()
-    print("Horror-Studio Bot запущен!")
+    print("Horror-Studio Bot V1.1 запущен!")
 
     await dp.start_polling(bot)
 
