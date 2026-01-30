@@ -4,7 +4,6 @@
 # ================================
 
 import asyncio
-import os
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
@@ -25,7 +24,6 @@ from db import (
 
 from groq_ai import generate_story_reply
 
-
 # ================================
 # Создание бота
 # ================================
@@ -45,6 +43,7 @@ active_story = {}
 def main_menu(is_admin=False):
     kb = InlineKeyboardBuilder()
 
+    # Автор может создавать истории
     if is_admin:
         kb.button(text="➕ Создать историю", callback_data="create_story")
 
@@ -300,9 +299,6 @@ async def main():
 
     await dp.start_polling(bot)
 
-port = int(os.environ.get("PORT", 4000))  # 4000 — порт по умолчанию, если PORT не задан
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-});
+if __name__ == "__main__":
+    asyncio.run(main())
