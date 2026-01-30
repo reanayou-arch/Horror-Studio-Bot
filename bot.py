@@ -1,9 +1,12 @@
 # ================================
 # bot.py
-# Horror-Studio Bot V1.1 (AI + Render-ready)
+# Horror-Studio Bot V1.2 (AI + Render Free Fix)
 # ================================
 
 import asyncio
+import os
+
+from aiohttp import web
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
@@ -38,12 +41,37 @@ active_story = {}
 
 
 # ================================
+# Мини-сервер для Render (чтобы порт был открыт)
+# ================================
+async def healthcheck(request):
+    return web.Response(text="Horror-Studio Bot работает ✅")
+
+
+async def start_webserver():
+    """
+    Render требует открытый порт.
+    Этот сервер нужен только чтобы Render не выключал сервис.
+    """
+    app = web.Application()
+    app.router.add_get("/", healthcheck)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.getenv("PORT", 10000))
+
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    print(f"Web-server запущен на порту {port}")
+
+
+# ================================
 # Главное меню
 # ================================
 def main_menu(is_admin=False):
     kb = InlineKeyboardBuilder()
 
-    # Автор может создавать истории
     if is_admin:
         kb.button(text="➕ Создать историю", callback_data="create_story")
 
@@ -179,13 +207,6 @@ async def char_known(callback: CallbackQuery, state: FSMContext):
     })
 
     await callback.message.answer("✅ Персонаж добавлен!")
-
-    kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Добавить персонажа", callback_data="add_character")
-    kb.button(text="✅ Создать историю", callback_data="finish_story")
-    kb.adjust(1)
-
-    await callback.message.answer("Продолжить:", reply_markup=kb.as_markup())
     await state.clear()
 
 
@@ -213,69 +234,12 @@ async def finish_story(callback: CallbackQuery, state: FSMContext):
 
 
 # ================================
-# Список историй
-# ================================
-@dp.callback_query(F.data == "list_stories")
-async def list_stories(callback: CallbackQuery):
-    stories = get_stories()
-
-    if not stories:
-        await callback.message.answer("Историй пока нет.")
-        return
-
-    text = "📚 Истории:\n\n"
-    for sid, title in stories:
-        text += f"{sid}. {title}\n"
-
-    await callback.message.answer(text)
-
-
-# ================================
-# Начать игру
-# ================================
-@dp.callback_query(F.data == "play_story")
-async def play_story(callback: CallbackQuery):
-    stories = get_stories()
-
-    if not stories:
-        await callback.message.answer("Историй пока нет.")
-        return
-
-    kb = InlineKeyboardBuilder()
-    for sid, title in stories:
-        kb.button(text=title, callback_data=f"start_{sid}")
-
-    kb.adjust(1)
-
-    await callback.message.answer("Выберите историю:", reply_markup=kb.as_markup())
-
-
-@dp.callback_query(F.data.startswith("start_"))
-async def start_story(callback: CallbackQuery):
-    story_id = int(callback.data.split("_")[1])
-
-    story = get_story(story_id)
-
-    # Сохраняем активную историю игрока
-    active_story[callback.from_user.id] = story_id
-
-    title, desc, past, start_scene = story
-
-    await callback.message.answer(
-        f"📖 История: {title}\n\n"
-        f"{start_scene}\n\n"
-        "✍️ Напишите первое сообщение..."
-    )
-
-
-# ================================
 # Игровая переписка (AI отвечает)
 # ================================
 @dp.message()
 async def game_chat(message: Message):
     user_id = message.from_user.id
 
-    # Если игрок не начал историю — игнорируем
     if user_id not in active_story:
         return
 
@@ -284,19 +248,22 @@ async def game_chat(message: Message):
     story_data = get_story(story_id)
     characters = get_characters(story_id)
 
-    # Генерация ответа AI
     reply = generate_story_reply(story_data, characters, message.text)
 
     await message.answer(reply)
 
 
 # ================================
-# Запуск бота
+# Запуск
 # ================================
 async def main():
     init_db()
-    print("Horror-Studio Bot V1.1 запущен!")
+    print("Horror-Studio Bot запущен!")
 
+    # Запускаем web-сервер для Render
+    await start_webserver()
+
+    # Запускаем Telegram polling
     await dp.start_polling(bot)
 
 
