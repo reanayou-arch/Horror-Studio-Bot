@@ -1,6 +1,6 @@
 # ================================
 # bot.py
-# Horror-Studio Bot V1.2 (AI + Render Free Fix)
+# Horror-Studio Bot V1.4 (FSM FIX + Characters List + Age + Render Free)
 # ================================
 
 import asyncio
@@ -41,7 +41,7 @@ active_story = {}
 
 
 # ================================
-# Мини-сервер для Render (чтобы порт был открыт)
+# Мини-сервер для Render Free
 # ================================
 async def healthcheck(request):
     return web.Response(text="Horror-Studio Bot работает ✅")
@@ -59,7 +59,6 @@ async def start_webserver():
     await runner.setup()
 
     port = int(os.getenv("PORT", 10000))
-
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
@@ -83,6 +82,18 @@ def main_menu(is_admin=False):
 
 
 # ================================
+# Кнопки управления персонажами
+# ================================
+def character_menu():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➕ Добавить персонажа", callback_data="add_character")
+    kb.button(text="📜 Список персонажей", callback_data="show_characters")
+    kb.button(text="✅ Создать историю", callback_data="finish_story")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+# ================================
 # Команда /start
 # ================================
 @dp.message(CommandStart())
@@ -90,8 +101,12 @@ async def start(message: Message):
     is_admin = (message.from_user.id == ADMIN_ID)
 
     await message.answer(
-        "👻 Добро пожаловать в Horror-Studio Bot!\n\n"
-        "Выберите действие:",
+        "👻 Добро пожаловать в нашу студию!\n"
+        "Это панель автора, у вас нету права на ошибки или даже молитвы.\n\n"
+        "Внизу есть кнопки по которым ты можешь ориентироваться:\n"
+        "#1 Создать историю\n"
+        "#2 Список историй\n"
+        "#3 Начать историю",
         reply_markup=main_menu(is_admin)
     )
 
@@ -112,7 +127,6 @@ async def create_story(callback: CallbackQuery, state: FSMContext):
 @dp.message(StoryCreation.title)
 async def set_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text)
-
     await message.answer("Введите описание истории (для ИИ):")
     await state.set_state(StoryCreation.description)
 
@@ -120,7 +134,6 @@ async def set_title(message: Message, state: FSMContext):
 @dp.message(StoryCreation.description)
 async def set_description(message: Message, state: FSMContext):
     await state.update_data(description=message.text)
-
     await message.answer("Введите прошлое главного героя:")
     await state.set_state(StoryCreation.hero_past)
 
@@ -128,7 +141,6 @@ async def set_description(message: Message, state: FSMContext):
 @dp.message(StoryCreation.hero_past)
 async def set_hero_past(message: Message, state: FSMContext):
     await state.update_data(hero_past=message.text)
-
     await message.answer("Введите обстоятельства начала истории (вступительная сцена):")
     await state.set_state(StoryCreation.start_scene)
 
@@ -139,14 +151,9 @@ async def set_start_scene(message: Message, state: FSMContext):
 
     temp_characters[message.from_user.id] = []
 
-    kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Добавить персонажа", callback_data="add_character")
-    kb.button(text="✅ Создать историю", callback_data="finish_story")
-    kb.adjust(1)
-
     await message.answer(
         "История почти готова.\nДобавьте персонажей (до 15).",
-        reply_markup=kb.as_markup()
+        reply_markup=character_menu()
     )
 
 
@@ -168,6 +175,14 @@ async def add_char(callback: CallbackQuery, state: FSMContext):
 @dp.message(StoryCreation.char_name)
 async def char_name(message: Message, state: FSMContext):
     await state.update_data(char_name=message.text)
+
+    await message.answer("Сколько вашему персонажу лет?")
+    await state.set_state(StoryCreation.char_age)
+
+
+@dp.message(StoryCreation.char_age)
+async def char_age(message: Message, state: FSMContext):
+    await state.update_data(char_age=message.text)
 
     await message.answer("Введите роль персонажа:")
     await state.set_state(StoryCreation.char_role)
@@ -199,15 +214,50 @@ async def char_known(callback: CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
 
+    # Добавляем персонажа во временный список
     temp_characters[callback.from_user.id].append({
         "name": data["char_name"],
+        "age": data["char_age"],
         "role": data["char_role"],
         "personality": data["char_personality"],
         "known": known_status
     })
 
     await callback.message.answer("✅ Персонаж добавлен!")
-    await state.clear()
+
+    # Возвращаем меню персонажей
+    await callback.message.answer(
+        "Управление персонажами:",
+        reply_markup=character_menu()
+    )
+
+    # ❗ НЕ очищаем state истории
+    await state.set_state(None)
+
+
+# ================================
+# Список персонажей
+# ================================
+@dp.callback_query(F.data == "show_characters")
+async def show_characters(callback: CallbackQuery):
+    chars = temp_characters.get(callback.from_user.id, [])
+
+    if not chars:
+        await callback.message.answer("Персонажей пока нет.")
+        return
+
+    text = "📜 Список персонажей:\n\n"
+
+    for i, c in enumerate(chars, start=1):
+        text += (
+            f"{i}) Имя: {c['name']}\n"
+            f"Возраст: {c['age']}\n"
+            f"Роль: {c['role']}\n"
+            f"Характер: {c['personality']}\n"
+            f"Статус: {c['known']}\n\n"
+        )
+
+    await callback.message.answer(text)
 
 
 # ================================
@@ -225,7 +275,13 @@ async def finish_story(callback: CallbackQuery, state: FSMContext):
     )
 
     for c in temp_characters.get(callback.from_user.id, []):
-        add_character(story_id, c["name"], c["role"], c["personality"], c["known"])
+        add_character(
+            story_id,
+            c["name"],
+            f"{c['role']} ({c['age']} лет)",
+            c["personality"],
+            c["known"]
+        )
 
     await callback.message.answer("История создана! ✔️")
     await callback.message.answer("Главное меню:", reply_markup=main_menu(True))
@@ -234,23 +290,21 @@ async def finish_story(callback: CallbackQuery, state: FSMContext):
 
 
 # ================================
-# Игровая переписка (AI отвечает)
+# Список историй
 # ================================
-@dp.message()
-async def game_chat(message: Message):
-    user_id = message.from_user.id
+@dp.callback_query(F.data == "list_stories")
+async def list_stories(callback: CallbackQuery):
+    stories = get_stories()
 
-    if user_id not in active_story:
+    if not stories:
+        await callback.message.answer("Историй пока нет.")
         return
 
-    story_id = active_story[user_id]
+    text = "📚 Истории:\n\n"
+    for sid, title in stories:
+        text += f"{sid}. {title}\n"
 
-    story_data = get_story(story_id)
-    characters = get_characters(story_id)
-
-    reply = generate_story_reply(story_data, characters, message.text)
-
-    await message.answer(reply)
+    await callback.message.answer(text)
 
 
 # ================================
@@ -258,12 +312,9 @@ async def game_chat(message: Message):
 # ================================
 async def main():
     init_db()
-    print("Horror-Studio Bot запущен!")
+    print("Horror-Studio Bot V1.4 запущен!")
 
-    # Запускаем web-сервер для Render
     await start_webserver()
-
-    # Запускаем Telegram polling
     await dp.start_polling(bot)
 
 
