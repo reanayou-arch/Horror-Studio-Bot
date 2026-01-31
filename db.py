@@ -1,23 +1,32 @@
 # ================================
 # db.py
-# Работа с базой данных SQLite
+# Horror-Studio Bot Database System
 # ================================
 
 import sqlite3
 
 
+# ================================
+# Подключение к базе данных
+# ================================
 DB_NAME = "stories.db"
 
 
+# ================================
+# Инициализация базы данных
+# ================================
 def init_db():
     """
-    Создаём базу данных и таблицы,
-    если они ещё не существуют.
+    Создаёт все нужные таблицы,
+    если их ещё нет.
     """
+
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
+    # ----------------------------
     # Таблица историй
+    # ----------------------------
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +37,9 @@ def init_db():
         )
     """)
 
+    # ----------------------------
     # Таблица персонажей
+    # ----------------------------
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS characters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,8 +47,21 @@ def init_db():
             name TEXT,
             role TEXT,
             personality TEXT,
-            known_status TEXT,
-            FOREIGN KEY(story_id) REFERENCES stories(id)
+            known TEXT
+        )
+    """)
+
+    # ----------------------------
+    # Таблица сообщений (НОВОЕ)
+    # ----------------------------
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            story_id INTEGER,
+            sender TEXT,
+            text TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -45,11 +69,10 @@ def init_db():
     conn.close()
 
 
+# ================================
+# Истории
+# ================================
 def add_story(title, description, hero_past, start_scene):
-    """
-    Добавляем историю в базу.
-    Возвращаем ID созданной истории.
-    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
@@ -58,34 +81,14 @@ def add_story(title, description, hero_past, start_scene):
         VALUES (?, ?, ?, ?)
     """, (title, description, hero_past, start_scene))
 
-    story_id = cursor.lastrowid
-
     conn.commit()
+    story_id = cursor.lastrowid
     conn.close()
 
     return story_id
 
 
-def add_character(story_id, name, role, personality, known_status):
-    """
-    Добавляем персонажа в историю.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO characters (story_id, name, role, personality, known_status)
-        VALUES (?, ?, ?, ?, ?)
-    """, (story_id, name, role, personality, known_status))
-
-    conn.commit()
-    conn.close()
-
-
 def get_stories():
-    """
-    Получаем список всех историй.
-    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
@@ -97,48 +100,113 @@ def get_stories():
 
 
 def get_story(story_id):
-    """
-    Получаем полную информацию об истории.
-    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
     cursor.execute("""
         SELECT title, description, hero_past, start_scene
-        FROM stories WHERE id=?
+        FROM stories
+        WHERE id = ?
     """, (story_id,))
-    story = cursor.fetchone()
 
+    story = cursor.fetchone()
     conn.close()
+
     return story
 
 
-def get_characters(story_id):
-    """
-    Получаем персонажей конкретной истории.
-    """
+# ================================
+# Персонажи
+# ================================
+def add_character(story_id, name, role, personality, known):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT name, role, personality, known_status
-        FROM characters WHERE story_id=?
-    """, (story_id,))
-    chars = cursor.fetchall()
+        INSERT INTO characters (story_id, name, role, personality, known)
+        VALUES (?, ?, ?, ?, ?)
+    """, (story_id, name, role, personality, known))
 
+    conn.commit()
+    conn.close()
+
+
+def get_characters(story_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT name, role, personality, known
+        FROM characters
+        WHERE story_id = ?
+    """, (story_id,))
+
+    chars = cursor.fetchall()
     conn.close()
     return chars
 
 
-def delete_story(story_id):
+# ================================
+# Сообщения (НОВОЕ)
+# ================================
+
+def save_message(user_id, story_id, sender, text):
     """
-    Удаляем историю и всех её персонажей.
+    Сохраняет сообщение в историю диалога.
+    sender = "player" или "character"
     """
+
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    cursor.execute("DELETE FROM characters WHERE story_id=?", (story_id,))
-    cursor.execute("DELETE FROM stories WHERE id=?", (story_id,))
+    cursor.execute("""
+        INSERT INTO messages (user_id, story_id, sender, text)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, story_id, sender, text))
 
     conn.commit()
     conn.close()
+
+
+def get_last_messages(user_id, story_id, limit=20):
+    """
+    Возвращает последние limit сообщений
+    для отправки в Groq.
+    """
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT sender, text
+        FROM messages
+        WHERE user_id = ? AND story_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+    """, (user_id, story_id, limit))
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return list(reversed(rows))
+
+
+def get_full_dialog(user_id, story_id):
+    """
+    Возвращает весь диалог полностью.
+    """
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT sender, text, timestamp
+        FROM messages
+        WHERE user_id = ? AND story_id = ?
+        ORDER BY id ASC
+    """, (user_id, story_id))
+
+    dialog = cursor.fetchall()
+    conn.close()
+
+    return dialog
