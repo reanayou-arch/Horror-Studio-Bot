@@ -1,6 +1,7 @@
 # ================================
 # bot.py
-# Horror-Studio Bot V1.5 (Stable FINAL + Buttons Fix)
+# Horror-Studio Bot V2.0
+# MEMORY + LOGIC + TELEGRAM CHAT STYLE
 # ================================
 
 import asyncio
@@ -16,13 +17,16 @@ from aiogram.fsm.context import FSMContext
 
 from config import BOT_TOKEN, ADMIN_ID
 from states import StoryCreation
+
 from db import (
     init_db,
     add_story,
     add_character,
     get_stories,
     get_story,
-    get_characters
+    get_characters,
+    save_message,
+    get_last_messages
 )
 
 from groq_ai import generate_story_reply
@@ -48,10 +52,6 @@ async def healthcheck(request):
 
 
 async def start_webserver():
-    """
-    Render требует открытый порт.
-    Этот сервер нужен только чтобы Render не выключал сервис.
-    """
     app = web.Application()
     app.router.add_get("/", healthcheck)
 
@@ -82,7 +82,7 @@ def main_menu(is_admin=False):
 
 
 # ================================
-# Меню управления персонажами
+# Меню персонажей
 # ================================
 def character_menu():
     kb = InlineKeyboardBuilder()
@@ -94,7 +94,7 @@ def character_menu():
 
 
 # ================================
-# Команда /start
+# /start
 # ================================
 @dp.message(CommandStart())
 async def start(message: Message):
@@ -112,7 +112,7 @@ async def start(message: Message):
 
 
 # ================================
-# Создание истории (только автор)
+# Создание истории (автор)
 # ================================
 @dp.callback_query(F.data == "create_story")
 async def create_story(callback: CallbackQuery, state: FSMContext):
@@ -143,7 +143,7 @@ async def set_description(message: Message, state: FSMContext):
 @dp.message(StoryCreation.hero_past)
 async def set_hero_past(message: Message, state: FSMContext):
     await state.update_data(hero_past=message.text)
-    await message.answer("Введите обстоятельства начала истории (вступление):")
+    await message.answer("Введите вступительную сцену:")
     await state.set_state(StoryCreation.start_scene)
 
 
@@ -160,17 +160,11 @@ async def set_start_scene(message: Message, state: FSMContext):
 
 
 # ================================
-# Добавление персонажа
+# Добавление персонажей
 # ================================
 @dp.callback_query(F.data == "add_character")
 async def add_char(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-
-    chars = temp_characters.get(callback.from_user.id, [])
-
-    if len(chars) >= 15:
-        await callback.message.answer("❌ Лимит персонажей: 15.")
-        return
 
     await callback.message.answer("Введите имя персонажа:")
     await state.set_state(StoryCreation.char_name)
@@ -179,7 +173,7 @@ async def add_char(callback: CallbackQuery, state: FSMContext):
 @dp.message(StoryCreation.char_name)
 async def char_name(message: Message, state: FSMContext):
     await state.update_data(char_name=message.text)
-    await message.answer("Сколько вашему персонажу лет?")
+    await message.answer("Сколько ему лет?")
     await state.set_state(StoryCreation.char_age)
 
 
@@ -213,8 +207,8 @@ async def char_personality(message: Message, state: FSMContext):
 async def char_known(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
-    known_status = "знакомый" if callback.data == "known_yes" else "незнакомый"
     data = await state.get_data()
+    known_status = "знакомый" if callback.data == "known_yes" else "незнакомый"
 
     temp_characters[callback.from_user.id].append({
         "name": data["char_name"],
@@ -225,34 +219,7 @@ async def char_known(callback: CallbackQuery, state: FSMContext):
     })
 
     await callback.message.answer("✅ Персонаж добавлен!")
-    await callback.message.answer("Управление персонажами:", reply_markup=character_menu())
-
-
-# ================================
-# Список персонажей
-# ================================
-@dp.callback_query(F.data == "show_characters")
-async def show_characters(callback: CallbackQuery):
-    await callback.answer()
-
-    chars = temp_characters.get(callback.from_user.id, [])
-
-    if not chars:
-        await callback.message.answer("Персонажей пока нет.")
-        return
-
-    text = "📜 Список персонажей:\n\n"
-
-    for i, c in enumerate(chars, start=1):
-        text += (
-            f"{i}) Имя: {c['name']}\n"
-            f"Возраст: {c['age']}\n"
-            f"Роль: {c['role']}\n"
-            f"Характер: {c['personality']}\n"
-            f"Статус: {c['known']}\n\n"
-        )
-
-    await callback.message.answer(text)
+    await callback.message.answer("Продолжить:", reply_markup=character_menu())
 
 
 # ================================
@@ -287,34 +254,13 @@ async def finish_story(callback: CallbackQuery, state: FSMContext):
 
 
 # ================================
-# Список историй
-# ================================
-@dp.callback_query(F.data == "list_stories")
-async def list_stories(callback: CallbackQuery):
-    await callback.answer()
-
-    stories = get_stories()
-
-    if not stories:
-        await callback.message.answer("Историй пока нет.")
-        return
-
-    text = "📚 Истории:\n\n"
-    for sid, title in stories:
-        text += f"{sid}. {title}\n"
-
-    await callback.message.answer(text)
-
-
-# ================================
-# Начать историю (FIXED)
+# Начать историю
 # ================================
 @dp.callback_query(F.data == "play_story")
 async def play_story(callback: CallbackQuery):
     await callback.answer()
 
     stories = get_stories()
-
     if not stories:
         await callback.message.answer("Историй пока нет.")
         return
@@ -324,7 +270,6 @@ async def play_story(callback: CallbackQuery):
         kb.button(text=title, callback_data=f"start_{sid}")
 
     kb.adjust(1)
-
     await callback.message.answer("Выберите историю:", reply_markup=kb.as_markup())
 
 
@@ -339,15 +284,17 @@ async def start_story(callback: CallbackQuery):
 
     title, desc, past, start_scene = story
 
+    # Сохраняем вступление в память диалога
+    save_message(callback.from_user.id, story_id, "character", start_scene)
+
     await callback.message.answer(
-        f"📖 История: {title}\n\n"
-        f"{start_scene}\n\n"
+        f"📖 История началась:\n\n{start_scene}\n\n"
         "✍️ Напишите первое сообщение..."
     )
 
 
 # ================================
-# Игровая переписка (AI)
+# Игровой чат (AI + память)
 # ================================
 @dp.message()
 async def game_chat(message: Message):
@@ -357,20 +304,38 @@ async def game_chat(message: Message):
         return
 
     story_id = active_story[user_id]
+
+    # 1) Сохраняем сообщение игрока
+    save_message(user_id, story_id, "player", message.text)
+
+    # 2) Получаем последние 20 сообщений
+    dialog_context = get_last_messages(user_id, story_id, limit=20)
+
+    # 3) Загружаем историю и персонажей
     story_data = get_story(story_id)
     characters = get_characters(story_id)
 
-    reply = generate_story_reply(story_data, characters, message.text)
+    # 4) Генерация AI ответа
+    reply = generate_story_reply(
+        story_data,
+        characters,
+        dialog_context,
+        message.text
+    )
 
+    # 5) Сохраняем ответ AI
+    save_message(user_id, story_id, "character", reply)
+
+    # 6) Отправляем игроку
     await message.answer(reply)
 
 
 # ================================
-# Запуск бота
+# Запуск
 # ================================
 async def main():
     init_db()
-    print("Horror-Studio Bot V1.5 запущен!")
+    print("Horror-Studio Bot V2.0 запущен!")
 
     await start_webserver()
     await dp.start_polling(bot)
